@@ -3,7 +3,7 @@ name = "flab"
 version = "0.1.0"
 description = "Library for Feature Lab empirics"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "einops>=0.8.2",
     "matplotlib>=3.10.8",
