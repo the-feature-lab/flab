@@ -1,8 +1,6 @@
 import torch.nn as nn
 import torch
 import copy
-import numpy as np
-import math
 
 class CenteredWrapper(nn.Module):
     """
@@ -44,19 +42,19 @@ def centeredmodel(model: nn.Module, baseline_dtype=None) -> nn.Module:
 
 
 class MLP(nn.Module):
-    def __init__(self, d_in=1, width=4096, depth=2, d_out=1, bias=True, nonlinearity=None, forcezeros=False):
+    def __init__(self, d_in=1, width=4096, depth=2, d_out=1, bias=True, **kwargs):
         super().__init__()
         self.d_in, self.width, self.depth, self.d_out = d_in, width, depth, d_out
 
         self.input_layer = nn.Linear(d_in, width, bias)
         self.hidden_layers = nn.ModuleList([nn.Linear(width, width, bias) for _ in range(depth - 1)])
         self.output_layer = nn.Linear(width, d_out, bias)
-        if forcezeros:
+        if kwargs.get('zero_output_layer', False):
             with torch.no_grad():
                 self.output_layer.weight.zero_()
                 if self.output_layer.bias is not None:
                     self.output_layer.bias.zero_()
-        self.nonlin = nonlinearity if nonlinearity is not None else nn.ReLU()
+        self.nonlin = kwargs.get('nonlinearity', nn.ReLU)()
         
     def forward(self, x):
         h = self.nonlin(self.input_layer(x))

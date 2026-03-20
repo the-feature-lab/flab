@@ -3,7 +3,7 @@ import torch
 import os
 
 
-## Recommend: use core.devices.as_ndarray
+## Recommend: use devices.as_ndarray
 def ensure_numpy(x, dtype=np.float64, clone=False):
     """Convert torch.Tensor to numpy array if necessary.
     """
@@ -15,7 +15,7 @@ def ensure_numpy(x, dtype=np.float64, clone=False):
     return result
 
 
-## Recommend: use core.devices.as_tensor
+## Recommend: use devices.as_tensor
 def ensure_torch(x, dtype=torch.float32, device=None, clone=False):
     """
     Convert array-like to torch.Tensor on the desired device/dtype.
@@ -91,7 +91,7 @@ def derive_seed(master_seed, device_id=0):
     ss = np.random.SeedSequence([int(master_seed), int(device_id)])
     return int(ss.generate_state(1, dtype=np.uint32)[0])
 
-## Recommend: use core.devices.set_global_seed
+## Recommend: use devices.set_global_seed
 def seed_everything(seed_int, device_id=0, make_generators=True, deterministic=False):
     """
     Set Python/NumPy/Torch (CPU & current CUDA device) RNGs.
