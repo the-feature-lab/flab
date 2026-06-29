@@ -123,3 +123,10 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+#claude
+.serena
+.claude
+CLAUDE.md
+prompts
+reports
