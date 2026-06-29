@@ -1,4 +1,3 @@
-import json
 import numpy as np
 import pickle
 import os
@@ -8,10 +7,11 @@ import matplotlib.pyplot as plt
 def rcsetup(**kwargs):
     """Configure matplotlib rc settings for a consistent plot style.
 
-    Args:
+    **kwargs:
         dpi (int): Figure resolution in dots per inch. Default 120.
         panel_color (tuple): Axis facecolor as an RGB tuple. Default is white.
         fontsize (int): Base font size for title and axis text. Default 12.
+        retina (bool): If True, use retina display format for inline plots. Default False.
     """
     dpi = kwargs.get("dpi", 120)
     panel_color = kwargs.get("panel_color", (1, 1, 1))
@@ -24,26 +24,30 @@ def rcsetup(**kwargs):
     plt.rc("mathtext", fontset='cm')
     # Use TrueType fonts in PDF
     plt.rc("pdf", fonttype=42)
+    if kwargs.get("retina", False):
+        from matplotlib_inline.backend_inline import set_matplotlib_formats
+        set_matplotlib_formats('retina')
 
 
 class ExptTrace():
-    """A dict-like container for recording experiment outcomes indexed by tuples
+    """A dict-like container for recording experiment measurements indexed by tuples
     of independent variable values. Measurements can be modified/retrieved by both
     direct bracket indexing (trace[a, b] = val) and keyword-based access via set/get.
     Measurement traces (along a variable axis) are retrieved using slicing and returned
     as a (possibly masked) ndarray ordered by sorted axis values.
 
     self.var_names is the list of names of experimental independent variables.
-    A "config" is a tuple of values for each independent variable.
-    An "outcome" is an experimental measurement, represented as a numeric scalar or array.
-    Every outcome in a single ExptTrace must be of the same shape.
+    Each key is a tuple of values specifying each such independent variable.
+    Each val is an experimental measurement, represented as a numeric scalar or array.
+    Every val in an ExptTrace must be of the same shape.
 
     Example:
         mse = ExptTrace(["trial", "ntrain", "ridge"])
         mse[0, 64, 0.1] = 0.42
         mse[0, 128, 0.1] = 0.55
         mse[1, 64, 0.1] = 0.31
-        mse[:, 64, 0.1]   # → array([0.42, 0.31])
+        mse[:, 64, 0.1]                   # → array([[[0.42]], [[0.31]]])
+        mse.trace(ntrain=64, ridge=0.1)   # → ([0, 1], array([0.42, 0.31]))
     """
 
     @classmethod
@@ -55,152 +59,226 @@ class ExptTrace():
         """
         Args:
             var_names (list of str): Names of the independent variables that
-                together define a config. "outcome" is a reserved name and
-                must not appear in this list.
+                together define an expt configuration.
         """
         if not isinstance(var_names, list):
             raise ValueError("var_names must be a list")
-        if "outcome" in var_names:
-            raise ValueError("variable name 'outcome' disallowed")
         self.var_names = var_names.copy()
-        self._config2outcome = {}
-        self.outcome_shape = None
+        self.measurements = {}
+        self.val_shape = None
 
     def __setitem__(self, key, val):
-        """Record an outcome for a config. Key is a scalar or tuple of config values."""
-        config, outcome = key, val
-        # ensure config is a tuple of the correct length
-        config = (config,) if not isinstance(config, tuple) else config
-        if len(config) != len(self.var_names):
-            raise ValueError(f"len config {len(config)} != num vars {len(self.var_names)}")
-        # ensure config settings are of valid types
+        """Given a config `key` (scalar or tuple), record a measurement `val`."""
+        # ensure key is a tuple of the correct length
+        key = (key,) if not isinstance(key, tuple) else key
+        if len(key) != len(self.var_names):
+            raise ValueError(f"len key {len(key)} != num vars {len(self.var_names)}")
+        # ensure key settings are of valid types
         allowed_types = (int, float, str, tuple, np.integer, np.floating)
-        if not all(isinstance(c, allowed_types) for c in config):
-            raise ValueError(f"config {config} elements must be one of {allowed_types}")
-        # ensure config doesn't already exist, then write measurement outcome
-        if config in self._config2outcome:
-            raise ValueError(f"config {config} already exists. overwriting not supported")
-        # if this is the first measurement, figure out shape of measurement outcome
-        if self.outcome_shape is None:
-            out_array = np.asarray(outcome)
+        if not all(isinstance(c, allowed_types) for c in key):
+            raise ValueError(f"key {key} elements must be one of {allowed_types}")
+        # ensure key doesn't already exist, then write measurement
+        if key in self.measurements.keys():
+            raise ValueError(f"key {key} already exists. overwriting not supported")
+        # if this is the first measurement, figure out shape of measurement
+        if self.val_shape is None:
+            out_array = np.asarray(val)
             if not np.issubdtype(out_array.dtype, np.number):
-                raise ValueError("measurement outcome must be numeric")
-            self.outcome_shape = out_array.shape
+                raise ValueError("measurement must be numeric")
+            self.val_shape = out_array.shape
         # otherwise, ensure new measurement has compatible shape
-        elif np.shape(outcome) != self.outcome_shape:
-            raise ValueError(f"outcome shape {np.shape(outcome)} != expected {self.outcome_shape}")
-        self._config2outcome[config] = outcome
+        elif np.shape(val) != self.val_shape:
+            raise ValueError(f"measurement shape {np.shape(val)} != expected {self.val_shape}")
+        self.measurements[key] = val
 
     def __getitem__(self, key):
-        """Retrieve outcomes for one or more configs.
+        """Retrieve measurements for one or more configurations of
+        independent experimental variables.
 
-        Key is a scalar/tuple of config values or slice(None) per variable.
+        `key` is a scalar/tuple of var_name values or slice(None) per variable.
         A bare slice (:) for a variable selects all recorded values for that
-        variable, returning an ndarray (or masked array if some configs are
+        variable, returning an ndarray (or masked array if some measurements are
         missing) with axes ordered by sorted variable values.
 
-        Returns a squeezed plain ndarray for a single config, a plain ndarray
-        if no values are missing, or a masked ndarray otherwise.
+        Returns a squeezed ndarray if a single measurement is selected,
+        a plain ndarray if many values selected with none missing,
+        or a masked ndarray otherwise.
 
         Raises:
-            KeyError: If none of the selected configs have been written.
+            KeyError: If none of the selected measurements have been written.
         """
-        # we need to know shape of measurement outcome
-        if self.outcome_shape is None:
+        # we need to know shape of measurement
+        if self.val_shape is None:
             raise RuntimeError("must add items before getting")
-        # key = tuple of indexers (ints or slices). Selects configs.
+        # key = tuple of indexers (ints or slices). Selects experimental configurations.
         # ensure key is a tuple of the correct length
-        var_indexers = (key,) if not isinstance(key, tuple) else key
-        if len(var_indexers) != len(self.var_names):
-            raise ValueError(f"num config vars {len(var_indexers)} != expected {len(self.var_names)}")
+        key = (key,) if not isinstance(key, tuple) else key
+        if len(key) != len(self.var_names):
+            raise ValueError(f"num variables {len(key)} != expected {len(self.var_names)}")
 
-        # for each indep var, get the var value selected by the key.
-        # if the indexer is a (full) slice, get the full axis for that var
+        # for each independent variable, get the indexer.
+        # if the indexer is a (full) slice, get the full axis for that variable
+        # then, construct the axes of all selected configurations, in order of var_names.
         config_axes = []
         for idx, var_name in enumerate(self.var_names):
-            var_setting = var_indexers[idx]
-            config_axis = [var_setting]
-            if isinstance(var_setting, slice):
-                slc = (var_setting.start, var_setting.stop, var_setting.step)
+            key_idxr = key[idx]
+            config_axis = [key_idxr]
+            if isinstance(key_idxr, slice):
+                slc = (key_idxr.start, key_idxr.stop, key_idxr.step)
                 if not all([x is None for x in slc]):
                     raise ValueError(f"slice start/stop/step not supported ({var_name})")
                 config_axis = self.get_axis(var_name)
             config_axes.append(config_axis)
 
-        # create a meshgrid of all selected configs, populate with outcomes.
-        # use masked array to handle missing/unwritten outcomes.
-        config_shape = [len(ax) for ax in config_axes]
-        result_mesh = np.ma.masked_all(config_shape + list(self.outcome_shape))
-        for mesh_idxs in np.ndindex(*config_shape):
-            config = tuple(config_axes[dim][idx] for dim, idx in enumerate(mesh_idxs))
-            if config in self._config2outcome.keys():
-                result_mesh[mesh_idxs] = self._config2outcome[config]
+        # create a meshgrid of all selected configurations, populate with measurements.
+        # use masked array to handle missing/unwritten measurements.
+        key_shape = [len(ax) for ax in config_axes]
+        result_mesh = np.ma.masked_all(key_shape + list(self.val_shape))
+        for mesh_idxs in np.ndindex(*key_shape):
+            _key = tuple(config_axes[dim][idx] for dim, idx in enumerate(mesh_idxs))
+            if _key in self.measurements.keys():
+                result_mesh[mesh_idxs] = self.measurements[_key]
 
-        # if all results are missing, raise KeyError.
+        # if all measurements are missing, raise KeyError.
         # if the key selects a single measurement, return a squeezed array.
-        # if there are no missing results, return a regular ndarray.
+        # if there are no missing measurements, return a regular ndarray.
+        # otherwise, return a masked array.
         if np.all(result_mesh.mask):
-            raise KeyError(f"config(s) {var_indexers} is/are missing")
-        if np.prod(config_shape) == 1:
+            raise KeyError(f"key(s) {key} is/are missing")
+        if np.prod(key_shape) == 1:
             return np.array(result_mesh).squeeze()
         if not np.ma.is_masked(result_mesh):
             return np.array(result_mesh)
         return result_mesh
 
     def __str__(self):
-        shape_str = str(self.outcome_shape) if self.outcome_shape is not None else "unknown"
+        shape_str = str(self.val_shape) if self.val_shape is not None else "unknown"
         vars_str = ", ".join(self.var_names) if self.var_names else "(none)"
-        return f"ExptTrace(vars=[{vars_str}], outcome_shape={shape_str})"
+        return f"ExptTrace(vars=[{vars_str}], val_shape={shape_str})"
 
     def get_axis(self, var_name):
         """Return the sorted list of all recorded values for a variable."""
         if var_name not in self.var_names:
             raise ValueError(f"var {var_name} not found")
         var_idx = self.var_names.index(var_name)
-        # iterate through written configs and collect all var settings
+        # iterate through written measurements and collect all var settings
         axis = set()
-        for config in self._config2outcome.keys():
-            axis.add(config[var_idx])
+        for key in self.measurements.keys():
+            axis.add(key[var_idx])
         return sorted(list(axis))
 
     def get(self, **kwargs):
-        """Retrieve outcomes using keyword arguments for each variable.
-
+        """Retrieve measurements using keyword arguments for each variable.
         Unspecified variables are sliced in full (equivalent to [:]).
         """
-        key = self._get_config_key(_mode='get', **kwargs)
-        return self[key]
+        return self[self._get_key('get', **kwargs)]
 
-    def set(self, **kwargs):
-        """Record an outcome using keyword arguments. Requires outcome=<value>."""
-        if "outcome" not in kwargs:
-            raise ValueError(f"no outcome given")
-        outcome = kwargs["outcome"]
-        config = self._get_config_key(_mode='set', **kwargs)
-        self[config] = outcome
+    def get_trace(self, **kwargs):
+        """Retrieve a 1D trace of measurements along a single variable axis.
+
+        Exactly one variable must be left unspecified (or set to None); that
+        variable becomes the trace axis (equivalent to a [:] slice), while every
+        other variable must be pinned to a scalar value.
+
+        As a special case, two variables may be left unspecified if one of them
+        is named "trial". The other (the "var" axis) becomes the trace axis, and
+        measurements are aggregated across the (possibly ragged) trial axis into
+        a per-var-setting mean and standard deviation.
+
+        Returns:
+            (axis, result):
+                `axis`: sorted ndarray of trace-variable values.
+                `result`: with one unspecified variable, an ndarray of shape
+                    (len(axis), *val_shape) of the corresponding measurements.
+                    With "trial" additionally unspecified, a tuple
+                    (result_mean, result_std), each an ndarray of shape
+                    (len(axis), *val_shape). In all cases len(axis) == len(result).
+
+        Raises:
+            ValueError: If the unspecified variables don't match an allowed case.
+            KeyError: If no selected measurement has been written.
+        """
+        missing = [v for v in self.var_names if kwargs.get(v, None) is None]
+        reduce_trials = len(missing) == 2 and "trial" in missing
+        if not (len(missing) == 1 or reduce_trials):
+            raise ValueError(
+                "trace requires exactly one unspecified variable (or two if one "
+                f"is 'trial'), got {missing}")
+
+        if not reduce_trials:
+            axis = self.get_axis(missing[0])
+            result = self.get(**kwargs)
+
+            # collapse the singleton pinned dims to align result with the trace
+            # axis, keeping the trace axis first and any outcome dims trailing.
+            result = result.reshape((len(axis),) + self.val_shape)
+            if np.ma.is_masked(result):
+                # a config is missing iff its whole measurement is masked; drop
+                # those configs (and axis values), return plain (unmasked) data.
+                present = ~np.ma.getmaskarray(result).reshape(len(axis), -1).all(axis=1)
+                axis = [a for a, keep in zip(axis, present) if keep]
+                result = np.asarray(result[present])
+            else:
+                result = np.asarray(result)
+            return np.array(axis), result
+
+        # two unspecified axes: aggregate across the "trial" axis.
+        var = missing[0] if missing[1] == "trial" else missing[1]
+        axis = self.get_axis(var)
+        trial_axis = self.get_axis("trial")
+        result = self.get(**kwargs)
+
+        # collapse the singleton pinned dims, isolating the (trial, var) block.
+        # the two full dims keep their relative order from var_names.
+        if self.var_names.index("trial") < self.var_names.index(var):
+            result = result.reshape((len(trial_axis), len(axis)) + self.val_shape)
+            trial_dim = 0
+        else:
+            result = result.reshape((len(axis), len(trial_axis)) + self.val_shape)
+            trial_dim = 1
+
+        # reduce the (possibly ragged) trial dim: masked trials are ignored, so
+        # each var setting is averaged over only the trials it actually has.
+        # ddof=0 keeps std well-defined even for var settings with a single trial.
+        result = np.ma.asarray(result)
+        result_mean = np.ma.mean(result, axis=trial_dim)
+        result_std = np.ma.std(result, axis=trial_dim)
+
+        # a var setting is missing iff it has no trials at all (fully masked);
+        # drop those (and their axis values) to align result with the trace axis.
+        present = ~np.ma.getmaskarray(result_mean).reshape(len(axis), -1).all(axis=1)
+        axis = [a for a, keep in zip(axis, present) if keep]
+        result_mean = np.asarray(result_mean[present])
+        result_std = np.asarray(result_std[present])
+        return np.array(axis), (result_mean, result_std)
+
+    def set(self, val, /, **kwargs):
+        """Record a measurement using keyword arguments."""
+        key = self._get_key('set', **kwargs)
+        self[key] = val
 
     def is_written(self, **kwargs):
-        """Return True if the given config (specified by kwargs) has been recorded."""
-        config = self._get_config_key(_mode='set', **kwargs)
-        return config in self._config2outcome.keys()
+        """Return True if the given configuration (specified by kwargs) has been recorded."""
+        key = self._get_key('set', **kwargs)
+        return key in self.measurements.keys()
 
-    def _get_config_key(self, _mode='set', **kwargs):
+    def _get_key(self, mode='set', /, **kwargs):
         key = []
         for var_name in self.var_names:
-            var_indexer = kwargs.get(var_name, None)
-            if var_indexer is None:
-                if _mode == 'set':
+            key_idxr = kwargs.get(var_name, None)
+            if key_idxr is None:
+                if mode == 'set':
                     raise ValueError(f"must specify var {var_name}")
-                var_indexer = slice(None)  # full slice indexer in “get” mode
-            key.append(var_indexer)
+                key_idxr = slice(None)
+            key.append(key_idxr)
         return tuple(key)
 
     def serialize(self):
         """Return a plain dict representation suitable for pickling or JSON storage."""
         return {
             "var_names": self.var_names,
-            "config2outcome": self._config2outcome,
-            "outcome_shape": self.outcome_shape
+            "measurements": self.measurements,
+            "val_shape": self.val_shape
         }
 
     @classmethod
@@ -208,44 +286,11 @@ class ExptTrace():
         """Reconstruct an ExptTrace from a dict produced by serialize()."""
         try:
             obj = cls(data["var_names"])
-            obj._config2outcome = data["config2outcome"]
-            obj.outcome_shape = data["outcome_shape"]
+            obj.measurements = data["measurements"]
+            obj.val_shape = data["val_shape"]
         except KeyError as e:
             raise ValueError(f"Missing key in serialized data: {e}")
         return obj
-
-
-class StreamingTrace(ExptTrace):
-    """ExptTrace subclass that appends each measurement to a JSONL file as it is recorded.
-
-    Useful for live monitoring (e.g. a Streamlit dashboard) during long training runs.
-    The JSONL file can be read incrementally while training is in progress; the in-memory
-    ExptTrace remains available for post-run analysis.
-
-    Each line of the JSONL file is a JSON object with one key per var_name plus "outcome".
-
-    Example:
-        loss_trace = StreamingTrace(["step"], "runs/loss.jsonl")
-        loss_trace[0] = 2.31
-        loss_trace[100] = 1.87
-        # runs/loss.jsonl now contains:
-        #   {"step": 0, "outcome": 2.31}
-        #   {"step": 100, "outcome": 1.87}
-    """
-
-    def __init__(self, var_names, path):
-        super().__init__(var_names)
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        self._path = path
-        open(path, "w").close()  # clear any existing contents
-
-    def __setitem__(self, key, val):
-        super().__setitem__(key, val)
-        config = (key,) if not isinstance(key, tuple) else key
-        record = dict(zip(self.var_names, (c.item() if isinstance(c, np.generic) else c for c in config)))
-        record["outcome"] = np.asarray(val).tolist()
-        with open(self._path, "a") as f:
-            f.write(json.dumps(record) + "\n")
 
 
 class FileManager():
