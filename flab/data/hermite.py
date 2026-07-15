@@ -1,8 +1,7 @@
 import numpy as np
 import torch as torch   
 import math
-
-from utils import ensure_numpy, ensure_torch
+from devices import as_ndarray, as_tensor
 
 
 def get_powerlaw(P, exp, offset=3, normalize=True):
@@ -40,10 +39,10 @@ def get_hermite_polynomials():
 def compute_hermite_basis(X, monomials, is_X_PCAd=False):
     N, _ = X.shape
     if not is_X_PCAd:
-        X = ensure_torch(X)
+        X = as_tensor(X)
         U, _, _ = torch.linalg.svd(X, full_matrices=False)
         X = np.sqrt(N) * U
-    X_PCA = ensure_numpy(X)
+    X_PCA = as_ndarray(X)
 
     hermites = get_hermite_polynomials()
     
@@ -67,8 +66,8 @@ def get_synthetic_X(d=500, N=15000, offset=3, alpha=1.5, data_eigvals = None, ge
     """
     Powerlaw synthetic data
     """
-    data_eigvals = ensure_torch(get_powerlaw(d, alpha, offset=offset, normalize=True) if data_eigvals is None else data_eigvals)
-    X = ensure_torch(torch.normal(0, 1, (N, d), generator=gen, device=data_eigvals.device)) * torch.sqrt(data_eigvals)
+    data_eigvals = as_tensor(get_powerlaw(d, alpha, offset=offset, normalize=True) if data_eigvals is None else data_eigvals)
+    X = as_tensor(torch.normal(0, 1, (N, d), generator=gen, device=data_eigvals.device)) * torch.sqrt(data_eigvals)
     return X, data_eigvals
 
 def get_new_polynomial_data(lambdas, Vt, monomials, dim, N, data_eigvals, N_original,
@@ -84,18 +83,18 @@ def get_new_polynomial_data(lambdas, Vt, monomials, dim, N, data_eigvals, N_orig
 
 def polynomial_batch_fn(lambdas, Vt, monomials, bsz, data_eigvals, N,
                   X=None, y=None, data_creation_fn=get_new_polynomial_data, gen=None):
-    lambdas, Vt, data_eigvals = map(ensure_torch, (lambdas, Vt, data_eigvals))
+    lambdas, Vt, data_eigvals = map(as_tensor, (lambdas, Vt, data_eigvals))
     dim = len(data_eigvals)
     def batch_fn(step: int, X=X, y=y):
         if (X is not None) and (y is not None):
-            X_fixed = ensure_torch(X)
-            y_fixed = ensure_torch(y)
+            X_fixed = as_tensor(X)
+            y_fixed = as_tensor(y)
             return X_fixed, y_fixed
         with torch.no_grad():
             dcf_args = dict(lambdas=lambdas, Vt=Vt, monomials=monomials, dim=dim,
                             N=bsz, data_eigvals=data_eigvals, N_original=N, gen=gen)
             X, y = data_creation_fn(**dcf_args)
-        X, y = map(ensure_torch, (X, y))
+        X, y = map(as_tensor, (X, y))
         return X, y
     
     return batch_fn
