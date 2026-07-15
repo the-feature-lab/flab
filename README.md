@@ -20,7 +20,7 @@ Then the following should work:
 ```
 from flab.empirics import rcsetup
 from flab.mupify import mupify
-from flab.prismatic.feature_decomp import generate_hea_monomials
+from flab.prismatic.hea import generate_hea_monomials
 # etc
 ```
 
@@ -33,7 +33,8 @@ flab/
 │   └── vision.py           # Image dataset loading, downloading, and preprocessing
 │
 ├── prismatic/          # Tools for polynomial/Hermite feature analysis
-│   ├── feature_decomp.py   # Monomial representation and HEA eigenvalue computation
+│   ├── hea.py              # Monomial representation, HEA eigenvalue computation, and coeff loading
+│   ├── deprecated.py       # Deprecated monomial target/grouping helpers
 │   └── utils.py            # Lower-level array/tensor utilities and seeding
 │
 ├── devices.py          # Device management and tensor/array conversion
