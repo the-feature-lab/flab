@@ -101,25 +101,6 @@ def polynomial_batch_fn(lambdas, Vt, monomials, bsz, data_eigvals, N,
     return batch_fn
 
 
-# def get_synthetic_dataset(X=None, data_eigvals=None, d=500, N=15000, offset=3, alpha=1.5, cutoff_mode=10000,
-#                           noise_size=0.1, yoffset=3, beta=1.2, normalized=True, gen=None, **kwargs):
-#     """
-#     noise_size: total noise size of the N-dim target vector y
-#     """
-#     if X is None:
-#         X, data_eigvals = get_synthetic_X(d=d, N=N, offset=offset, alpha=alpha, gen=gen)
-
-#     kernel_width = kwargs.get("kernel_width", 2)
-#     kerneltype = kwargs.get("kerneltype", None)
-#     hea_eigvals, monomials = generate_hea_monomials(data_eigvals, cutoff_mode, kerneltype.get_level_coeff_fn(kernel_width=kernel_width, data_eigvals=data_eigvals, **kwargs), kmax=kwargs.get('kmax', 9))
-#     H = ensure_torch(compute_hermite_basis(X, monomials))
-#     hea_eigvals = ensure_torch(hea_eigvals)
-#     v_true = ensure_torch(get_powerlaw(H.shape[1], beta/2, offset=yoffset, normalize=normalized))
-#     v_true = v_true if not normalized else v_true/torch.linalg.norm(v_true)* N**(0.5)
-#     y = ensure_torch(H) @ v_true + ensure_torch(torch.normal(0., noise_size, (H.shape[0],), generator=gen, device=H.device))#/H.shape[0]**(0.5)
-#     return X, y, H, monomials, hea_eigvals, v_true, data_eigvals
-
-
 # leftover that might be useful later:
 from scipy.special import zeta
 def get_powerlaw_target(H, source_exp, offset=6, normalizeH=False, include_noise=False):
