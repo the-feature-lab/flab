@@ -1,0 +1,152 @@
+import numpy as np
+import torch
+import os
+
+
+## Recommend: use devices.as_ndarray
+def ensure_numpy(x, dtype=np.float64, clone=False):
+    """Convert torch.Tensor to numpy array if necessary.
+    """
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    result = np.asarray(x, dtype=dtype)
+    if clone and result is x:
+        return result.copy()
+    return result
+
+
+## Recommend: use devices.as_tensor
+def ensure_torch(x, dtype=torch.float32, device=None, clone=False):
+    """
+    Convert array-like to torch.Tensor on the desired device/dtype.
+
+    Notes:
+      - In multiprocessing, call torch.cuda.set_device(device_id) in each worker.
+        Leaving device=None will then use that worker's GPU via 'cuda'.
+      - On single-GPU, device=None -> 'cuda' automatically.
+    """
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")  # current CUDA device (per-process)
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    elif isinstance(device, int):
+        device = torch.device(f"cuda:{device}")
+    elif isinstance(device, str):
+        device = torch.device(device)
+
+    if not isinstance(x, torch.Tensor):
+        return torch.as_tensor(x, dtype=dtype, device=device)
+
+    # Already a tensor: move/cast only if needed
+    needs_move = (x.device != device) or (x.dtype != dtype)
+    if needs_move:
+        x = x.to(device=device, dtype=dtype, non_blocking=True)
+
+    return x.clone() if clone else x
+
+def tuple_to_numpy(x, dtype=np.float64, clone=False):
+    """Recursively convert array-like leaves to NumPy via ensure_numpy.
+    Preserves lists/tuples/dicts (namedtuples keep their type).
+    Sets become tuples to avoid unhashable ndarrays.
+    Leaves scalars/strings/None unchanged.
+    """
+    # simple leaves
+    if x is None or isinstance(x, (str, bytes, bytearray)):
+        return x
+    if np.isscalar(x):
+        return x
+
+    # containers
+    if isinstance(x, dict):
+        return {k: tuple_to_numpy(v, dtype=dtype, clone=clone) for k, v in x.items()}
+    if isinstance(x, tuple) and hasattr(x, "_fields"):  # namedtuple
+        return type(x)(*(tuple_to_numpy(v, dtype=dtype, clone=clone) for v in x))
+    if isinstance(x, tuple):
+        return tuple(tuple_to_numpy(v, dtype=dtype, clone=clone) for v in x)
+    if isinstance(x, list):
+        return [tuple_to_numpy(v, dtype=dtype, clone=clone) for v in x]
+    if isinstance(x, set):
+        return tuple(tuple_to_numpy(v, dtype=dtype, clone=clone) for v in x)
+
+    try:
+        return ensure_numpy(x, dtype=dtype, clone=clone)
+    except Exception:
+        return x
+
+
+## ---- seeding utils ----
+
+def derive_seed(master_seed, device_id=0):
+    """
+    Deterministic if master_seed is not None; otherwise uses OS entropy.
+    """
+    if master_seed is None:
+        # non-deterministic (different each run)
+        s = (os.getpid() ^ (device_id << 16)) & 0xFFFFFFFF
+        return int(s)
+
+    ss = np.random.SeedSequence([int(master_seed), int(device_id)])
+    return int(ss.generate_state(1, dtype=np.uint32)[0])
+
+## Recommend: use devices.set_global_seed
+def seed_everything(seed_int, device_id=0, make_generators=True, deterministic=False):
+    """
+    Set Python/NumPy/Torch (CPU & current CUDA device) RNGs.
+    Returns a torch.Generator() seeded the same way if requested.
+    """
+    np.random.seed(seed_int)
+    torch.manual_seed(seed_int)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_int)  # current device
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    return (torch.Generator(device=f"cuda:{device_id}").manual_seed(seed_int), np.random.default_rng(seed_int)) if make_generators else None
+
+## ---- from hea utils ----
+
+def get_monomial_targets(monomials, hea_eigvals, n_markers=20):
+    target_monomials = [{0:1}, {10:1}, {100:1}, {190:1},
+                        {0:2}, {0:1,1:1}, {1:1, 3:1}, {16:1,20:1}, {20:1,30:1},
+                        {0:3}, {0:1, 1:1, 2:1}, {1:1, 3:1, 4:1}, {3:2, 5:1},
+                        {0:4}]
+
+    monomial_idxs = set()
+    for tmon in target_monomials:
+        if tmon not in monomials:
+            print(f"Target {tmon} not in generated monomials. Skipping.")
+            continue
+        monomial_idxs.add(monomials.index(tmon))
+    assert len(monomial_idxs) > 0
+
+    # Add more modes: log-equidistant selection from hea_eigvals
+    num_degrees = 3
+    masked_eigvals = np.ma.masked_all((num_degrees, len(hea_eigvals)))
+    for idx, monomial in enumerate(monomials):
+        if 1 <= monomial.degree() <= num_degrees:
+            masked_eigvals[monomial.degree()-1, idx] = hea_eigvals[idx]
+    markers = np.logspace(np.log10(hea_eigvals[2_000]), np.log10(hea_eigvals[0]), n_markers)
+    for i, marker in enumerate(markers):
+        degree = i%num_degrees + 1
+        idx = int(np.argmin(np.abs(masked_eigvals[degree-1] - marker)))
+        if idx not in monomial_idxs:
+            monomial_idxs.add(idx)
+    return sorted(monomial_idxs)
+
+
+def group_by_deg_max(monomials, stop_at_degree=None, assume_sorted=False):
+    groups = {}
+    for i, m in enumerate(monomials):
+        deg = m.degree()
+        if stop_at_degree is not None and deg > stop_at_degree:
+            if assume_sorted:
+                break
+            continue
+        key = (deg, m.max_degree())
+        if key not in groups:
+            groups[key] = []
+        groups[key].append((i, m))
+    return groups
